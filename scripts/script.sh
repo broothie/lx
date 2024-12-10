@@ -1,4 +1,7 @@
+#!/usr/bin/env sh
 
-# lx: docs about this script
+# The following lines will be extracted by `lx`:
+# lx: Here's some info about this script.
+# lx: Here's some more.
 
-echo "from script.sh"
+echo "from scripts/script.sh"

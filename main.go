@@ -40,7 +40,7 @@ func run() error {
 			return errors.Wrap(err, "finding executables")
 		}
 
-		rows := [][]string{{"PATH", "INFO"}}
+		rows := [][]string{{"PATH", "DESCRIPTION"}}
 		for _, entry := range entries {
 			rows = append(rows, []string{entry.Path, entry.Message})
 		}
@@ -53,7 +53,8 @@ func run() error {
 		return errors.Wrap(err, "getting all messages")
 	}
 
-	fmt.Println(path)
+	fmt.Println(fmt.Sprintf("%s:", path))
+	fmt.Println()
 	fmt.Println(message)
 	return nil
 }
