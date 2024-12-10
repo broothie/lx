@@ -1,155 +1,74 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"flag"
 	"fmt"
-	"io/fs"
+	"io"
 	"os"
-	"path/filepath"
-	"slices"
+	"regexp"
 	"strings"
-	"sync"
+	"text/tabwriter"
 	"time"
-	"unicode/utf8"
 
 	"github.com/bobg/errors"
-	"golang.org/x/sync/errgroup"
+	"github.com/broothie/lx/internal/lx"
 )
 
-const lxSigil = "lx:"
-
-type Entry struct {
-	Path      string
-	LXMessage string
-}
+var commaSplitter = regexp.MustCompile(`\s*,\s*`)
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	timeout := flag.Duration("timeout", time.Second, "Command timeout.")
+	rootPath := flag.String("root", ".", "Root path to start search.")
+	skipDirs := flag.String("skip-dirs", strings.Join(lx.DefaultSkipDirs(), ","), "Directories to skip during search.")
 	flag.Parse()
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
-	group, ctx := errgroup.WithContext(ctx)
 
-	var entries []Entry
-	var entriesLock sync.Mutex
-	group.Go(func() error {
-		return filepath.WalkDir(".", func(path string, dirEntry fs.DirEntry, _ error) error {
-			info, err := dirEntry.Info()
-			if err != nil {
-				return errors.Wrapf(err, "getting dir entry info for %q", path)
-			}
+	path := flag.Arg(0)
+	if path == "" {
+		entries, err := lx.FindExecutables(ctx, *rootPath, commaSplitter.Split(*skipDirs, -1))
+		if err != nil {
+			return errors.Wrap(err, "finding executables")
+		}
 
-			if info.IsDir() {
-				return nil
-			}
+		rows := [][]string{{"PATH", "INFO"}}
+		for _, entry := range entries {
+			rows = append(rows, []string{entry.Path, entry.Message})
+		}
 
-			if !isExecutable(info.Mode()) {
-				return nil
-			}
-
-			group.Go(func() error {
-				if isUTF8, err := isUTF8(path); err != nil {
-					return errors.Wrapf(err, "detecting charset for %q", path)
-				} else if !isUTF8 {
-					return nil
-				}
-
-				lxMessage, err := extractFirstLXMessage(path)
-				if err != nil {
-					return errors.Wrapf(err, "extracting lx message from %q", path)
-				}
-
-				entry := Entry{
-					Path:      path,
-					LXMessage: lxMessage,
-				}
-
-				entriesLock.Lock()
-				entries = append(entries, entry)
-				entriesLock.Unlock()
-				return nil
-			})
-
-			return nil
-		})
-	})
-
-	if err := group.Wait(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return writeTable(os.Stdout, rows)
 	}
 
-	slices.SortFunc(entries, func(a, b Entry) int { return strings.Compare(a.Path, b.Path) })
-	for _, entry := range entries {
-		fmt.Println(entry.Path, "", entry.LXMessage)
-	}
-}
-
-func isUTF8(path string) (bool, error) {
-	file, err := os.Open(path)
+	message, err := lx.AllMessages(path)
 	if err != nil {
-		return false, errors.Wrapf(err, "opening file %q", path)
+		return errors.Wrap(err, "getting all messages")
 	}
 
-	defer func() {
-		if closeErr := file.Close(); err != nil {
-			err = errors.Join(err, closeErr)
-		}
-	}()
-
-	scanner := bufio.NewScanner(file)
-	scanner.Scan()
-	return utf8.ValidString(scanner.Text()), nil
+	fmt.Println(path)
+	fmt.Println(message)
+	return nil
 }
 
-func extractFirstLXMessage(path string) (string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", errors.Wrapf(err, "opening file %q", path)
-	}
-
-	defer func() {
-		if closeErr := file.Close(); err != nil {
-			err = errors.Join(err, closeErr)
-		}
-	}()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		if _, lxMessage, found := strings.Cut(scanner.Text(), lxSigil); found {
-			return strings.TrimSpace(lxMessage), nil
+func writeTable(w io.Writer, rows [][]string) error {
+	table := tabwriter.NewWriter(w, 0, 1, 2, ' ', 0)
+	for _, row := range rows {
+		if _, err := fmt.Fprintln(table, strings.Join(row, "\t")); err != nil {
+			return errors.Wrap(err, "writing row")
 		}
 	}
 
-	return "", nil
-}
-
-func extractLXMessages(path string) (_ []string, err error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, errors.Wrapf(err, "opening file %q", path)
+	if err := table.Flush(); err != nil {
+		return errors.Wrap(err, "flushing table")
 	}
 
-	defer func() {
-		if closeErr := file.Close(); err != nil {
-			err = errors.Join(err, closeErr)
-		}
-	}()
-
-	var lxMessages []string
-	scanner := bufio.NewScanner(file)
-	for i := 0; scanner.Scan(); i++ {
-		if _, lxMessage, found := strings.Cut(scanner.Text(), lxSigil); found {
-			lxMessages = append(lxMessages, strings.TrimSpace(lxMessage))
-		}
-	}
-
-	return lxMessages, nil
-}
-
-func isExecutable(mode os.FileMode) bool {
-	return mode&0111 != 0
+	return nil
 }
