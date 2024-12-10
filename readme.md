@@ -45,3 +45,9 @@ Usage of lx:
   -timeout duration
     	Command timeout. (default 1s)
 ```
+
+## Installation
+
+```sh
+go install github.com/broothie/lx@latest 
+```
